@@ -10,7 +10,7 @@
 
 部署中碰到一个问题：
 
-* 在Windows系统下的VSCode安装**Remote-SSH**扩展后，使用扩展配置 SSH并进行远程连接，可能会发生 `Bad owner or permissions on C:\Users\Administrator/.ssh/config ` **错误，造成无法进行SSH远程连接的问题。原因是由于使用 `**Remote-SSH`**扩展所依赖的 `**Remote-SSH:Editing Configuration Files** `扩展编辑了 `**C:\Users\Administrator.ssh\config`**文件后，此文件的权限发生了改变。编辑 `%USER HOME%.ssh\config` 文件后，不但在VSCode中由于配置文件权限问题而无法进行SSH远程连接，就连使用系统的 `PowerShell `  进行SSH连接时也会报此错误，而把此配置文件删除后，使用**PowerShell**即可正常进行远程连接。但VSCode的SSH连接又依赖此配置文件，所以就产生了冲突，要么只有 `PowerShell`能用，要么就都不能用。
+* 在Windows系统下的VSCode安装Remote-SSH扩展后，使用扩展配置 SSH并进行远程连接，可能会发生 `Bad owner or permissions on C:\Users\Administrator/.ssh/config ` **错误，造成无法进行SSH远程连接的问题。原因是由于使用 `Remote-SSH`扩展所依赖的 **`Remote-SSH:Editing Configuration Files `**扩展编辑了`C:\Users\Administrator.ssh\config`文件后，此文件的权限发生了改变。编辑 **`%USER HOME%.ssh\config` **文件后，不但在VSCode中由于配置文件权限问题而无法进行SSH远程连接，就连使用系统的 `PowerShell ` 进行SSH连接时也会报此错误，而把此配置文件删除后，使用PowerShell即可正常进行远程连接。但VSCode的SSH连接又依赖此配置文件，所以就产生了冲突，要么只有 `PowerShell`能用，要么就都不能用。
   ![1716363757672](image/lesson2/1716363757672.png)
 
 部署结果如下：
