@@ -50,9 +50,9 @@ pip install -e '.[all]'
 
 ![1716901151803](image/lesson4/1716901151803.png)
 
-### 2 前期准备
+## 2. 前期准备
 
-#### 2.1 数据集准备
+### 2.1 数据集准备
 
 为了让模型能够让模型认清自己的身份弟位，知道在询问自己是谁的时候回复成我们想要的样子，我们就需要通过在微调数据集中大量掺杂这部分的数据。
 
@@ -776,3 +776,275 @@ streamlit run /root/ft/web_demo/InternLM/chat/web_demo.py --server.address 127.0
 ### 2.6 总结
 
 在本节中主要就是带领着大家跑通了 XTuner 的一个完整流程，通过了解数据集和模型的使用方法、配置文件的制作和训练以及最后的转换及整合。那在后面假如我们也有想要微调出自己的一个模型，我们也可以尝试使用同样流程和方法进行进一步的实践！
+
+## 3. XTuner多模态
+
+### 3.1 给LLM装上电子眼：多模态LLM原理简介
+
+文本单模态：
+
+```mermaid
+flowchart LR
+a[输入文本] -.- A(文本Embedding模型) -.-> b[/文本向量/]
+b --> c((L L M))
+c --> d[输出文本]
+```
+
+文本+图像多模态：
+
+```mermaid
+flowchart LR
+a[输入文本] -.- A(文本Embedding模型) -.-> b[/文本向量/]
+b --> c((L L M))
+c --> d[输出文本]
+subgraph " "
+f[输入图像] -.- F("Image Projector")
+F -.-> g[/图像向量/]
+end
+g --> c
+```
+
+### 3.2 什么型号的电子眼：LLaVA方案简介
+
+[Haotian Liu等](https://arxiv.org/abs/2304.08485)使用GPT-4V对图像数据生成描述，以此构建出大量 `<question text><image> -- <answer text>`的数据对。利用这些数据对，配合文本单模态LLM，训练出一个Image Projector。
+
+所使用的 `文本单模型LLM`和训练出来的 `Image Projector`，统称为 `LLaVA模型`。
+
+#### 3.2.1. LLaVA训练/测试阶段示意图
+
+![1716971275190](image/lesson4/1716971275190.png)![1716971285872](image/lesson4/1716971285872.png)
+
+> Image Projector的训练和测试，有点类似之前我们讲过的LoRA微调方案。
+
+二者都是在已有LLM的基础上，用新的数据训练一个新的小文件。
+
+只不过，LLM套上LoRA之后，有了新的灵魂（角色）；而LLM套上Image Projector之后，才有了眼睛。
+
+### 3.3 实操
+
+> 在本节中，我们将 **自己构造 `<question text><image>--<answer text>` 数据对，基于InternLM2_Chat_1.8B这个文本单模态模型，使用LLaVA方案，训练一个给InternLM2_Chat_1.8B使用的Image Projector文件。**
+
+LLaVA方案中，给LLM增加视觉能力的过程，即是训练Image Projector文件的过程。 该过程分为2个阶段：Pretrain和Finetune。
+
+![1716972169994](image/lesson4/1716972169994.png)
+
+#### 3.3.1 Pretrain阶段
+
+在Pretrain阶段，我们会使用大量的 `图片+简单文本（caption, 即图片标题）`数据对，使LLM理解图像中的 **普遍特征** 。即，对大量的图片进行 **粗看** 。
+
+Pretrain阶段训练完成后，此时的模型已经有视觉能力了！但是由于训练数据中都是图片+图片标题，所以此时的模型虽然有视觉能力，但无论用户问它什么，它都只会回答输入图片的标题。即， **此时的模型只会给输入图像“写标题”** 。
+
+> Pretrain阶段相当于是开发LLM时预训练工作，对硬件要求非常高，有8卡的学有余力同学可以自行尝试。详见[XTuner-LLaVA](https://github.com/InternLM/xtuner/blob/main/docs/zh_cn/user_guides/dataset_prepare.md#llava-dataset)和[LLaVA](https://llava-vl.github.io/)。
+>
+> <details>
+>
+> ```bash
+> NPROC_PER_NODE=8 xtuner train llava_internlm2_chat_1_8b_clip_vit_large_p14_336_e1_gpu8_pretrain --deepspeed deepspeed_zero2
+>
+> NPROC_PER_NODE=8 xtuner train llava_internlm2_chat_1_8b_qlora_clip_vit_large_p14_336_lora_e1_gpu8_finetune --deepspeed deepspeed_zero2
+> ```
+
+在本次实战营中，我们已经为大家提供了Pretrain阶段的产物——`iter_2181.pth`文件。它就是幼稚园阶段的Image Projector！大家带着 `iter_2181.pth`文件继续进入下一阶段进行Finetune即可。
+
+#### 3.3.2 Finetune阶段
+
+在Finetune阶段，我们会使用 `图片+复杂文本`数据对，来对Pretrain得到的Image Projector即iter_2181.pth进行进一步的训练。
+
+* 训练数据集构建，格式如下：
+
+```
+[
+    {
+        "id": "随便什么字符串",
+        "image": "图片文件的相对位置。相对谁？相对你后面config文件里指定的image_folder参数的路径。",
+        "conversation": [
+            {
+                "from": "human",
+                "value": "<image>\n第1个问题。"
+            },
+            {
+                "from": "gpt",
+                "value": "第1个回答"
+            },
+            {
+                "from": "human",
+                "value": "第2个问题。"
+            },
+            {
+                "from": "gpt",
+                "value": "第2个回答"
+            },
+            # ......
+            {
+                "from": "human",
+                "value": "第n个问题。"
+            },
+            {
+                "from": "gpt",
+                "value": "第n个回答"
+            },
+        ]
+    },
+
+    # 下面是第2组训练数据了。
+
+    {
+        "id": "随便什么字符串",
+        "image": "图片文件的相对位置。相对谁？相对你后面config文件里指定的image_folder参数的路径。",
+        "conversation": [
+            {
+                "from": "human",
+                "value": "<image>\n第1个问题。"
+            },
+            # ......
+            {
+                "from": "gpt",
+                "value": "第n个回答"
+            }
+        ]
+    }
+]
+```
+
+> 注意：每组训练数据的第1个来自human的问题前，要加上图片占位符，即 `<image>`
+
+我们可以效法LLaVA作者的做法，将自己的图片发送给GPT，要求其按照上述格式生成若干条问答对。
+
+<details>
+<summary>prompts</summary>
+
+Create a dataset for me, following this format.
+
+```json
+[
+  {
+    "id": "<random_number_string>",
+    "image": "test_img/oph.jpg",
+    "conversations": [
+      {
+        "from": "human",
+        "value": "<image>\nDescribe this image."
+      },
+      {
+        "from": "gpt",
+        "value": "<answer1>"
+      },
+      {
+        "from": "human",
+        "value": "<question2>"
+      },
+      {
+        "from": "gpt",
+        "value": "<answer2>"
+      },
+      {
+        "from": "human",
+        "value": "<question3>"
+      },
+      {
+        "from": "gpt",
+        "value": "<answer3>"
+      }
+    ]
+  }
+]
+```
+
+The questions and answers, please generate for me, based on the image I sent to you. Thes questions should be from the shallow to the deep, and the answers should be as detailed and correct as possible. The questions and answers should be stick to the contents in the image itself, like objects, peoples, equipment, environment, purpose, color, attitude, etc. 5 question and answer pairs.
+
+</details>
+<br>
+
+为了方便大家跟随课程，针对这张示例图片的问答对数据（repeat_data.json），大家按照下面的脚本运行就可以生成啦~（重复200次）
+
+```shell
+cd ~ && git clone https://github.com/InternLM/tutorial -b camp2 && conda activate xtuner0.1.17 && cd tutorial
+
+python /root/tutorial/xtuner/llava/llava_data/repeat.py \
+  -i /root/tutorial/xtuner/llava/llava_data/unique_data.json \
+  -o /root/tutorial/xtuner/llava/llava_data/repeated_data.json \
+  -n 200
+```
+
+* 准备配置文件
+
+> 如果你懒到不想自己改配置文件，或者怎么改都失败。我们准备了一个fool_config文件在仓库里。运行：
+
+```python
+cp /root/tutorial/xtuner/llava/llava_data/internlm2_chat_1_8b_llava_tutorial_fool_config.py /root/tutorial/xtuner/llava/llava_internlm2_chat_1_8b_qlora_clip_vit_large_p14_336_lora_e1_gpu8_finetune_copy.py
+```
+
+* 创建配置文件
+
+```shell
+# 查询xtuner内置配置文件
+xtuner list-cfg -p llava_internlm2_chat_1_8b
+
+# 拷贝配置文件到当前目录
+xtuner copy-cfg \
+  llava_internlm2_chat_1_8b_qlora_clip_vit_large_p14_336_lora_e1_gpu8_finetune \
+  /root/tutorial/xtuner/llava
+```
+
+当前你的 `/root/tutorial/xtuner/llava/`目录下的文件结构应该是这样：
+
+```shell
+|-- llava_data
+|   |-- repeat.py
+|   |-- repeated_data.json
+|   |-- test_img
+|   |   `-- oph.jpg
+|   `-- unique_data.json
+`-- llava_internlm2_chat_1_8b_qlora_clip_vit_large_p14_336_lora_e1_gpu8_finetune_copy.py
+```
+
+* 修改配置文件
+
+```
+# Model
+- llm_name_or_path = 'internlm/internlm2-chat-1_8b'
++ llm_name_or_path = '/root/share/new_models/Shanghai_AI_Laboratory/internlm2-chat-1_8b'
+- visual_encoder_name_or_path = 'openai/clip-vit-large-patch14-336'
++ visual_encoder_name_or_path = '/root/share/new_models/openai/clip-vit-large-patch14-336'
+
+# Specify the pretrained pth
+- pretrained_pth = './work_dirs/llava_internlm2_chat_1_8b_clip_vit_large_p14_336_e1_gpu8_pretrain/iter_2181.pth'  # noqa: E501
++ pretrained_pth = '/root/share/new_models/xtuner/iter_2181.pth'
+
+# Data
+- data_root = './data/llava_data/'
++ data_root = '/root/tutorial/xtuner/llava/llava_data/'
+- data_path = data_root + 'LLaVA-Instruct-150K/llava_v1_5_mix665k.json'
++ data_path = data_root + 'repeated_data.json'
+- image_folder = data_root + 'llava_images'
++ image_folder = data_root
+
+# Scheduler & Optimizer
+- batch_size = 16  # per_device
++ batch_size = 1  # per_device
+
+
+# evaluation_inputs
+- evaluation_inputs = ['请描述一下这张图片','Please describe this picture']
++ evaluation_inputs = ['Please describe this picture','What is the equipment in the image?']
+```
+
+![1716974509568](image/lesson4/1716974509568.png)
+
+* 开始Finetune
+
+```shell
+cd /root/tutorial/xtuner/llava/
+xtuner train /root/tutorial/xtuner/llava/llava_internlm2_chat_1_8b_qlora_clip_vit_large_p14_336_lora_e1_gpu8_finetune_copy.py --deepspeed deepspeed_zero2
+```
+
+> 若出现Nonetype报错，重装transformers库，pip intall transformers==4.39.3
+
+
+Finetune前后效果对比：
+
+**Finetune前：只会打标题**
+
+![1716988260374](image/lesson4/1716988260374.png)**Finetune后：会回答问题了**
+
+![1716988305676](image/lesson4/1716988305676.png)
